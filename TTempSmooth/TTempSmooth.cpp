@@ -24,6 +24,7 @@
 */
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -38,13 +39,14 @@ struct TTempSmoothData {
     double scthresh;
     bool fp, process[3];
     int diameter, shift;
+    float threshF[3];
     unsigned * weight[3], cw;
     void (*filter[3])(const VSFrameRef *[15], const VSFrameRef *[15], VSFrameRef *, const int, const int, const int, const TTempSmoothData * const VS_RESTRICT, const VSAPI *);
 };
 
 template<typename T1, typename T2, bool useDiff>
-static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFrameRef * dst, const int fromFrame, const int toFrame, const int plane,
-                   const TTempSmoothData * const VS_RESTRICT d, const VSAPI * vsapi) noexcept {
+static void filterI(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFrameRef * dst, const int fromFrame, const int toFrame, const int plane,
+                    const TTempSmoothData * const VS_RESTRICT d, const VSAPI * vsapi) noexcept {
     const int width = vsapi->getFrameWidth(dst, plane);
     const int height = vsapi->getFrameHeight(dst, plane);
     const int stride = vsapi->getStride(dst, plane) / sizeof(T1);
@@ -144,19 +146,125 @@ static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFram
     }
 }
 
+template<bool useDiff>
+static void filterF(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFrameRef * dst, const int fromFrame, const int toFrame, const int plane,
+                    const TTempSmoothData * const VS_RESTRICT d, const VSAPI * vsapi) noexcept {
+    const int width = vsapi->getFrameWidth(dst, plane);
+    const int height = vsapi->getFrameHeight(dst, plane);
+    const int stride = vsapi->getStride(dst, plane) / sizeof(float);
+    const float * srcp[15] = {}, * pfp[15] = {};
+    for (int i = 0; i < d->diameter; i++) {
+        srcp[i] = reinterpret_cast<const float *>(vsapi->getReadPtr(src[i], plane));
+        pfp[i] = reinterpret_cast<const float *>(vsapi->getReadPtr(pf[i], plane));
+    }
+    float * VS_RESTRICT dstp = reinterpret_cast<float *>(vsapi->getWritePtr(dst, plane));
+
+    const float thresh = d->threshF[plane];
+    const unsigned * const weightSaved = d->weight[plane];
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            const float c = pfp[d->maxr][x];
+            unsigned weights = d->cw;
+            float sum = srcp[d->maxr][x] * d->cw;
+
+            int frameIndex = d->maxr - 1;
+
+            if (frameIndex > fromFrame) {
+                float t1 = pfp[frameIndex][x];
+                float diff = std::abs(c - t1);
+
+                if (diff < thresh) {
+                    unsigned weight = weightSaved[useDiff ? static_cast<int>(diff * 255.f) : frameIndex];
+                    weights += weight;
+                    sum += srcp[frameIndex][x] * weight;
+
+                    frameIndex--;
+                    int v = 256;
+
+                    while (frameIndex > fromFrame) {
+                        const float t2 = t1;
+                        t1 = pfp[frameIndex][x];
+                        diff = std::abs(c - t1);
+
+                        if (diff < thresh && std::abs(t1 - t2) < thresh) {
+                            weight = weightSaved[useDiff ? static_cast<int>(diff * 255.f) + v : frameIndex];
+                            weights += weight;
+                            sum += srcp[frameIndex][x] * weight;
+
+                            frameIndex--;
+                            v += 256;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            frameIndex = d->maxr + 1;
+
+            if (frameIndex < toFrame) {
+                float t1 = pfp[frameIndex][x];
+                float diff = std::abs(c - t1);
+
+                if (diff < thresh) {
+                    unsigned weight = weightSaved[useDiff ? static_cast<int>(diff * 255.f) : frameIndex];
+                    weights += weight;
+                    sum += srcp[frameIndex][x] * weight;
+
+                    frameIndex++;
+                    int v = 256;
+
+                    while (frameIndex < toFrame) {
+                        const float t2 = t1;
+                        t1 = pfp[frameIndex][x];
+                        diff = std::abs(c - t1);
+
+                        if (diff < thresh && std::abs(t1 - t2) < thresh) {
+                            weight = weightSaved[useDiff ? static_cast<int>(diff * 255.f) + v : frameIndex];
+                            weights += weight;
+                            sum += srcp[frameIndex][x] * weight;
+
+                            frameIndex++;
+                            v += 256;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (d->fp)
+                dstp[x] = (srcp[d->maxr][x] * (65536 - weights) + sum) / 65536.f;
+            else
+                dstp[x] = sum / weights;
+        }
+
+        for (int i = 0; i < d->diameter; i++) {
+            srcp[i] += stride;
+            pfp[i] += stride;
+        }
+        dstp += stride;
+    }
+}
+
 static void selectFunctions(TTempSmoothData * d) noexcept {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             if (d->thresh[plane] > d->mdiff[plane] + 1) {
                 if (d->vi->format->bytesPerSample == 1)
-                    d->filter[plane] = filter<uint8_t, uint32_t, true>;
+                    d->filter[plane] = filterI<uint8_t, uint32_t, true>;
+                else if (d->vi->format->bytesPerSample == 2)
+                    d->filter[plane] = filterI<uint16_t, uint64_t, true>;
                 else
-                    d->filter[plane] = filter<uint16_t, uint64_t, true>;
+                    d->filter[plane] = filterF<true>;
             } else {
                 if (d->vi->format->bytesPerSample == 1)
-                    d->filter[plane] = filter<uint8_t, uint32_t, false>;
+                    d->filter[plane] = filterI<uint8_t, uint32_t, false>;
+                else if (d->vi->format->bytesPerSample == 2)
+                    d->filter[plane] = filterI<uint16_t, uint64_t, false>;
                 else
-                    d->filter[plane] = filter<uint16_t, uint64_t, false>;
+                    d->filter[plane] = filterF<false>;
             }
         }
     }
@@ -253,8 +361,9 @@ static void VS_CC ttempsmoothCreate(const VSMap *in, VSMap *out, void *userData,
     d->vi = vsapi->getVideoInfo(d->node);
 
     try {
-        if (!isConstantFormat(d->vi) || d->vi->format->sampleType != stInteger || d->vi->format->bitsPerSample > 16)
-            throw std::string{ "only constant format 8-16 bit integer input supported" };
+        if (!isConstantFormat(d->vi) || (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
+            (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
+            throw std::string{ "only constant format 8-16 bit integer and 32 bit float input supported" };
 
         d->maxr = int64ToIntS(vsapi->propGetInt(in, "maxr", 0, &err));
         if (err)
@@ -408,7 +517,10 @@ static void VS_CC ttempsmoothCreate(const VSMap *in, VSMap *out, void *userData,
                     d->cw = d->weight[plane][d->maxr];
                 }
 
-                d->thresh[plane] <<= d->shift;
+                if (d->vi->format->sampleType == stInteger)
+                    d->thresh[plane] <<= d->shift;
+                else
+                    d->threshF[plane] = d->thresh[plane] / 256.f;
             }
         }
 

@@ -11,7 +11,7 @@ Usage
 
     ttmpsm.TTempSmooth(clip clip[, int maxr=3, int[] thresh=[4, 5, 5], int[] mdiff=[2, 3, 3], int strength=2, float scthresh=12.0, bint fp=True, clip pfclip=None, int[] planes])
 
-* clip: Clip to process. Any planar format with integer sample type of 8-16 bit depth is supported.
+* clip: Clip to process. Any planar format with either integer sample type of 8-16 bit depth or float sample type of 32 bit depth is supported.
 
 * maxr: This sets the maximum temporal radius. By the way it works TTempSmooth automatically varies the radius used... this sets the maximum boundary. Possible values are 1 through 7. At 1 TTempSmooth will be (at max) including pixels from 1 frame away in the average (3 frames total will be considered counting the current frame). At 7 it would be including pixels from up to 7 frames away (15 frames total will be considered). With the way it checks motion there isn't much danger in setting this high, it's basically a quality vs. speed option. Lower settings are faster while larger values tend to create a more stable image.
 
