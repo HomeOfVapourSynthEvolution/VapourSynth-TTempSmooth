@@ -36,13 +36,13 @@ struct TTempSmoothData {
     const VSVideoInfo * vi;
     int maxr, thresh[3], mdiff[3];
     double scthresh;
-    bool fp, process[3], useDiff[3];
+    bool fp, process[3];
     int diameter, shift;
     unsigned * weight[3], cw;
     void (*filter[3])(const VSFrameRef *[15], const VSFrameRef *[15], VSFrameRef *, const int, const int, const int, const TTempSmoothData * const VS_RESTRICT, const VSAPI *);
 };
 
-template<typename T1, typename T2>
+template<typename T1, typename T2, bool useDiff>
 static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFrameRef * dst, const int fromFrame, const int toFrame, const int plane,
                    const TTempSmoothData * const VS_RESTRICT d, const VSAPI * vsapi) noexcept {
     const int width = vsapi->getFrameWidth(dst, plane);
@@ -54,6 +54,9 @@ static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFram
         pfp[i] = reinterpret_cast<const T1 *>(vsapi->getReadPtr(pf[i], plane));
     }
     T1 * VS_RESTRICT dstp = reinterpret_cast<T1 *>(vsapi->getWritePtr(dst, plane));
+
+    const int thresh = d->thresh[plane];
+    const unsigned * const weightSaved = d->weight[plane];
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -67,8 +70,8 @@ static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFram
                 int t1 = pfp[frameIndex][x];
                 int diff = std::abs(c - t1);
 
-                if (diff < d->thresh[plane]) {
-                    unsigned weight = d->weight[plane][d->useDiff[plane] ? diff >> d->shift : frameIndex];
+                if (diff < thresh) {
+                    unsigned weight = weightSaved[useDiff ? diff >> d->shift : frameIndex];
                     weights += weight;
                     sum += srcp[frameIndex][x] * weight;
 
@@ -80,8 +83,8 @@ static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFram
                         t1 = pfp[frameIndex][x];
                         diff = std::abs(c - t1);
 
-                        if (diff < d->thresh[plane] && std::abs(t1 - t2) < d->thresh[plane]) {
-                            weight = d->weight[plane][d->useDiff[plane] ? (diff >> d->shift) + v : frameIndex];
+                        if (diff < thresh && std::abs(t1 - t2) < thresh) {
+                            weight = weightSaved[useDiff ? (diff >> d->shift) + v : frameIndex];
                             weights += weight;
                             sum += srcp[frameIndex][x] * weight;
 
@@ -100,8 +103,8 @@ static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFram
                 int t1 = pfp[frameIndex][x];
                 int diff = std::abs(c - t1);
 
-                if (diff < d->thresh[plane]) {
-                    unsigned weight = d->weight[plane][d->useDiff[plane] ? diff >> d->shift : frameIndex];
+                if (diff < thresh) {
+                    unsigned weight = weightSaved[useDiff ? diff >> d->shift : frameIndex];
                     weights += weight;
                     sum += srcp[frameIndex][x] * weight;
 
@@ -113,8 +116,8 @@ static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFram
                         t1 = pfp[frameIndex][x];
                         diff = std::abs(c - t1);
 
-                        if (diff < d->thresh[plane] && std::abs(t1 - t2) < d->thresh[plane]) {
-                            weight = d->weight[plane][d->useDiff[plane] ? (diff >> d->shift) + v : frameIndex];
+                        if (diff < thresh && std::abs(t1 - t2) < thresh) {
+                            weight = weightSaved[useDiff ? (diff >> d->shift) + v : frameIndex];
                             weights += weight;
                             sum += srcp[frameIndex][x] * weight;
 
@@ -144,10 +147,17 @@ static void filter(const VSFrameRef * src[15], const VSFrameRef * pf[15], VSFram
 static void selectFunctions(TTempSmoothData * d) noexcept {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
-            if (d->vi->format->bytesPerSample == 1)
-                d->filter[plane] = filter<uint8_t, uint32_t>;
-            else
-                d->filter[plane] = filter<uint16_t, uint64_t>;
+            if (d->thresh[plane] > d->mdiff[plane] + 1) {
+                if (d->vi->format->bytesPerSample == 1)
+                    d->filter[plane] = filter<uint8_t, uint32_t, true>;
+                else
+                    d->filter[plane] = filter<uint16_t, uint64_t, true>;
+            } else {
+                if (d->vi->format->bytesPerSample == 1)
+                    d->filter[plane] = filter<uint8_t, uint32_t, false>;
+                else
+                    d->filter[plane] = filter<uint16_t, uint64_t, false>;
+            }
         }
     }
 }
@@ -205,12 +215,8 @@ static const VSFrameRef *VS_CC ttempsmoothGetFrame(int n, int activationReason, 
         }
 
         for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
-            if (d->process[plane]) {
-                if (d->pfclip)
-                    d->filter[plane](src, pf, dst, fromFrame, toFrame, plane, d, vsapi);
-                else
-                    d->filter[plane](src, src, dst, fromFrame, toFrame, plane, d, vsapi);
-            }
+            if (d->process[plane])
+                d->filter[plane](src, d->pfclip ? pf : src, dst, fromFrame, toFrame, plane, d, vsapi);
         }
 
         for (int i = 0; i < d->diameter; i++) {
@@ -347,8 +353,6 @@ static void VS_CC ttempsmoothCreate(const VSMap *in, VSMap *out, void *userData,
         for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
             if (d->process[plane]) {
                 if (d->thresh[plane] > d->mdiff[plane] + 1) {
-                    d->useDiff[plane] = true;
-
                     d->weight[plane] = new unsigned[256 * d->maxr];
                     double dt[15] = {}, rt[256] = {}, sum = 0.;
 
@@ -385,8 +389,6 @@ static void VS_CC ttempsmoothCreate(const VSMap *in, VSMap *out, void *userData,
 
                     d->cw = static_cast<unsigned>(dt[0] * scale + 0.5);
                 } else {
-                    d->useDiff[plane] = false;
-
                     d->weight[plane] = new unsigned[d->diameter];
                     double dt[15] = {}, sum = 0.;
 
