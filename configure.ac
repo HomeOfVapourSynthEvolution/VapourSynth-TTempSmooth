@@ -1,4 +1,4 @@
-AC_INIT([TTempSmooth], [2], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TTempSmooth/issues], [TTempSmooth], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TTempSmooth/])
+AC_INIT([TTempSmooth], [3], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TTempSmooth/issues], [TTempSmooth], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TTempSmooth/])
 
 : ${CXXFLAGS=""}
 
