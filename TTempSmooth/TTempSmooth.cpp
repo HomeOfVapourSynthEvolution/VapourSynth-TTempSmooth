@@ -550,6 +550,10 @@ static void VS_CC ttempsmoothCreate(const VSMap* in, VSMap* out, [[maybe_unused]
         }
 
         if (d->scthresh) {
+            auto miscPlugin{ vsapi->getPluginByID("com.vapoursynth.misc", core) };
+            if (!miscPlugin)
+                throw "MiscFilters (https://github.com/vapoursynth/vs-miscfilters-obsolete) not installed";
+
             auto args{ vsapi->createMap() };
 
             if (d->vi->format.colorFamily == cfRGB) {
@@ -574,10 +578,6 @@ static void VS_CC ttempsmoothCreate(const VSMap* in, VSMap* out, [[maybe_unused]
                 vsapi->mapSetNode(args, "clip", d->pfclip ? d->pfclip : d->node, maReplace);
             }
             vsapi->mapSetFloat(args, "threshold", d->scthresh / 100.0, maReplace);
-
-            auto miscPlugin{ vsapi->getPluginByID("com.vapoursynth.misc", core) };
-            if (!miscPlugin)
-                throw "MiscFilters (https://github.com/vapoursynth/vs-miscfilters-obsolete) not installed";
 
             auto ret{ vsapi->invoke(miscPlugin, "SCDetect", args) };
             if (vsapi->mapGetError(ret)) {
