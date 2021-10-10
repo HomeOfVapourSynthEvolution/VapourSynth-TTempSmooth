@@ -615,7 +615,7 @@ static void VS_CC ttempsmoothCreate(const VSMap* in, VSMap* out, [[maybe_unused]
 // Init
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
-    vspapi->configPlugin("com.holywu.ttempsmooth", "ttmpsm", "A basic, motion adaptive, temporal smoothing filter", VS_MAKE_VERSION(4, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->configPlugin("com.holywu.ttempsmooth", "ttmpsm", "A basic, motion adaptive, temporal smoothing filter", VS_MAKE_VERSION(4, 1), VAPOURSYNTH_API_VERSION, 0, plugin);
     vspapi->registerFunction("TTempSmooth",
                              "clip:vnode;"
                              "maxr:int:opt;"
